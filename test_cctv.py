@@ -106,7 +106,11 @@ def func1(q):
         t0 = time.time()
 
         # data_list = []
+        frame_sync = -1
         for path, img, im0s, vid_cap in dataset:  # 이미지 처리 시작, 영상의 경우 한장씩
+            frame_sync += 1
+            if frame_sync % 3 != 0:
+                continue
             img = torch.from_numpy(img).to(device)
             img = img.half() if half else img.float()  # uint8 to fp16/32
             img /= 255.0  # 0 - 255 to 0.0 - 1.0
@@ -278,7 +282,7 @@ def func1(q):
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default='yolov5s.pt', help='model.pt path(s)')
     # parser.add_argument('--source', type=str, default='rtsp://admin:admin1234@218.153.209.100:502/cam/realmonitor?channel=9&subtype=1', help='source')  # file/folder, 0 for webcam
-    parser.add_argument('--source', type=str, default='./data/videos/79-fast.mp4', help='source')  # file/folder, 0 for webcam
+    parser.add_argument('--source', type=str, default='./data/videos/79.mp4', help='source')  # file/folder, 0 for webcam
     parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.4, help='object confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.45, help='IOU threshold for NMS')
@@ -406,8 +410,11 @@ def func2(q):
         t0 = time.time()
 
         # data_list = []
-
+        frame_sync = -1
         for path, img, im0s, vid_cap in dataset:  # 이미지 처리 시작, 영상의 경우 한장씩
+            frame_sync += 1
+            if frame_sync % 2 != 0:
+                continue
             img = torch.from_numpy(img).to(device)
             img = img.half() if half else img.float()  # uint8 to fp16/32
             img /= 255.0  # 0 - 255 to 0.0 - 1.0
@@ -629,62 +636,50 @@ def func2(q):
             detect(opt=opt)
 def gui(q):
     im_src = cv2.imread('ch_b1.png')
+    
     car_width = 40
     car_length = 113
     c1_track = []
     c2_track = []
+    car_track = []
     before_frame= []
     while True:
-        dst2 = im_src.copy()
         now_frame= []
-        
-        id = 1
+        dst2 = im_src.copy()
         while q.qsize() != 0:
             print('queue size: ', q.qsize())
             point = q.get()
             a = point[0]
             b = point[1]
-            now_frame.append([a,b,id])
-            id += 1 
-
-        print()
-        print('before frame: ', before_frame, 'len: ', len(before_frame))
-        print('now frame: ', now_frame, 'len: ', len(now_frame))
-        idx = 0
-        if len(now_frame) <= len(before_frame):
-            # 현재 프레임 기준으로, 이전 프레임들 비교
-            for i in range(len(now_frame)):
-                MIN_dist = 1000000 # dummy value
-                for j in range(len(before_frame)):
-                    dist = math.sqrt((before_frame[j][0] - now_frame[i][0])**2 + (before_frame[j][1] - now_frame[i][1])**2)
-                    if MIN_dist > dist:
-                        MIN_dist = dist
-                        idx = j
-                if len(before_frame) != 0:
-                    now_frame[i][2] = before_frame[idx][2]
-        else: # now_frame > before_frame
-            # 이전 프레임 기준으로, 현재 프레임들 비교
-            for j in range(len(before_frame)):
-                MIN_dist = 1000000 # dummy value
-                for i in range(len(now_frame)):
-                    dist = math.sqrt((before_frame[j][0] - now_frame[i][0])**2 + (before_frame[j][1] - now_frame[i][1])**2)
-                    if MIN_dist > dist:
-                        MIN_dist = dist
-                        idx = i
-                if len(now_frame) != 0:
-                    now_frame[idx][2] = before_frame[j][2]
-
-        for i in range(len(now_frame)):
-            cv2.rectangle(dst2, (now_frame[i][0] - car_length, now_frame[i][1] - car_width//2), (now_frame[i][0] , now_frame[i][1] + car_width//2), (0, 0, -255), car_width)
-            print(f'{now_frame[i][0],now_frame[i][1],now_frame[i][2]}')
-            cv2.putText(dst2, f'{now_frame[i][2]}', (now_frame[i][0], now_frame[i][1] + car_width//2), cv2.FONT_HERSHEY_PLAIN, 10, (0, 0, -255), 10, cv2.LINE_AA)
+            now_frame.append([a,b])
+        
+        now_frame.sort(key=lambda x:x[0]) # x좌표 기준 정렬
+        
+        if len(now_frame) >= 2:
+            for i in range(len(now_frame)-1):
+                if now_frame[i+1][0] - now_frame[i][0] < car_length + 40: # x좌표 기준으로 차량이 겹치는 경우 153 = car_length 
+                    del now_frame[i+1]
+        
+        if len(now_frame) == 1 and len(c1_track) == 0:
+            c2_track.append(now_frame[0])
+        elif len(now_frame) == 1 and len(c2_track) != 0:
+            c1_track.append(now_frame[0])
+        elif len(now_frame) == 2:
+            c1_track.append(now_frame[0])
+            c2_track.append(now_frame[1])
+        
+        for i in range(len(c2_track)):
+            cv2.circle(dst2, (c2_track[i][0],c2_track[i][1]), 10, (0,0,255), -1)
+        for i in range(len(c1_track)):
+            cv2.circle(dst2, (c1_track[i][0],c1_track[i][1]), 10, (255,0,0), -1)
         dst2 = cv2.resize(dst2, dsize=(0, 0), fx=0.1, fy=0.1, interpolation=cv2.INTER_AREA)
         cv2.imshow('Parking lot', dst2)
         cv2.waitKey(1)
-        
-        if len(now_frame) != 0:
-            before_frame = now_frame
 
+        print()
+        print('c1 tracking: ', c1_track)
+        print()
+        print('c2 tarcking: ', c2_track)
 if __name__ == '__main__':
 
     # 프로세스를 생성합니다

@@ -1,4 +1,4 @@
-from multiprocessing import Process
+from multiprocessing import Process, Queue
 import argparse
 import time
 from pathlib import Path
@@ -7,6 +7,8 @@ import cv2
 import torch
 import torch.backends.cudnn as cudnn
 from numpy import random
+import random
+import math
 
 from models.experimental import attempt_load
 from utils.datasets import LoadStreams, LoadImages
@@ -15,7 +17,10 @@ from utils.general import check_img_size, check_requirements, check_imshow, non_
 from utils.plots import plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
-def func1():
+
+def func1(q1):
+    print("a")
+    
     def detect(opt):  # Homography 매칭에 사용되는 행렬값 입력받아야함
         source, weights, view_img, save_txt, imgsz = opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size
         save_img = not opt.nosave and not source.endswith('.txt')  # save inference images
@@ -102,8 +107,12 @@ def func1():
         t0 = time.time()
 
         # data_list = []
-
+        frame_sync = -1
+    
         for path, img, im0s, vid_cap in dataset:  # 이미지 처리 시작, 영상의 경우 한장씩
+            frame_sync += 1
+            if frame_sync % 3 != 0:
+                continue
             img = torch.from_numpy(img).to(device)
             img = img.half() if half else img.float()  # uint8 to fp16/32
             img /= 255.0  # 0 - 255 to 0.0 - 1.0
@@ -239,15 +248,17 @@ def func1():
                 realC = Cal / Cal[2]
                 a = round(int(realC[0]), 0)  # 중심점 x 좌표
                 b = round(int(realC[1]), 0)  # 중심점 y 좌표
+                
+                q1.put([a, b])
+                car_width = 40  # 지도 차량 크기 변수 (2.5m : 64px)
+                car_length = 90 # 6m
 
-                car_var = 40  # 지도 차량 크기 변수
-
-                cv2.rectangle(dst2, (a - 2 * car_var, b - car_var), (a , b), (0, 0, -255), car_var)
+                cv2.rectangle(dst2, (a - car_length, b - car_width//2), (a , b + car_width//2), (0, 0, -255), car_width)
                 # cv2.circle(im_src, (a, b), 10, (0, 0, -255), -1)
 
             if len(data_list) != 0:
                 dst2 = cv2.resize(dst2, dsize=(0, 0), fx=0.1, fy=0.1, interpolation=cv2.INTER_AREA)
-                cv2.imshow("Source Image", dst2)
+                # cv2.imshow("Source Image", dst2)
             #  바둑판 그리기
             # for k in range(0, 14):
             #     cv2.line(im0, (k * 50, 0), (k * 50, 480), (120, 120, 120), 1, 1)
@@ -258,6 +269,7 @@ def func1():
             print(f'{s}Done2. ({t4 - t3:.3f}s)')
 
             cv2.imshow('frame', im0)
+            
             if cv2.waitKey(27) == ord('w'):
                 exit()
 
@@ -271,7 +283,8 @@ def func1():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default='yolov5s.pt', help='model.pt path(s)')
-    parser.add_argument('--source', type=str, default='data/videos/79.mp4', help='source')  # file/folder, 0 for webcam
+    # parser.add_argument('--source', type=str, default='rtsp://admin:admin1234@218.153.209.100:502/cam/realmonitor?channel=9&subtype=1', help='source')  # file/folder, 0 for webcam
+    parser.add_argument('--source', type=str, default='./data/videos/79.mp4', help='source')  # file/folder, 0 for webcam
     parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.4, help='object confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.45, help='IOU threshold for NMS')
@@ -309,7 +322,8 @@ def func1():
             detect(opt=opt)
 
 
-def func2():
+def func2(q2):
+    print("b")
     # torch.multiprocessing.freeze_support()
 
     def detect(opt):  # Homography 매칭에 사용되는 행렬값 입력받아야함
@@ -398,8 +412,11 @@ def func2():
         t0 = time.time()
 
         # data_list = []
-
+        frame_sync = -1
         for path, img, im0s, vid_cap in dataset:  # 이미지 처리 시작, 영상의 경우 한장씩
+            frame_sync += 1
+            if frame_sync % 2 != 0:
+                continue
             img = torch.from_numpy(img).to(device)
             img = img.half() if half else img.float()  # uint8 to fp16/32
             img /= 255.0  # 0 - 255 to 0.0 - 1.0
@@ -550,16 +567,16 @@ def func2():
                 a = round(int(realC[0]), 0)  # 중심점 x 좌표
                 b = round(int(realC[1]), 0)  # 중심점 y 좌표
 
-                
-                
-                car_var = 40  # 지도 차량 크기 변수
+                q2.put([a, b])
+                car_width = 40  # 지도 차량 크기 변수 (2.5m : 64px)
+                car_length = 90 # 6m 약 130px line width 빼고 90
 
-                cv2.rectangle(dst2, (a - 2 * car_var, b - car_var), (a , b), (0, 0, -255), car_var)
+                cv2.rectangle(dst2, (a - car_length, b - car_width//2), (a , b + car_width//2), (0, 0, -255), car_width)
                 # cv2.circle(im_src, (a, b), 10, (0, 0, -255), -1)
             
             if len(data_list) != 0:
                 dst2 = cv2.resize(dst2, dsize=(0, 0), fx=0.1, fy=0.1, interpolation=cv2.INTER_AREA)
-                cv2.imshow("Source Image", dst2)
+                # cv2.imshow("Source Image", dst2)
             #  바둑판 그리기
             # for k in range(0, 14):
             #     cv2.line(im0, (k * 50, 0), (k * 50, 480), (120, 120, 120), 1, 1)
@@ -582,7 +599,8 @@ def func2():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default='yolov5s.pt', help='model.pt path(s)')
-    parser.add_argument('--source', type=str, default='data/videos/80-1.mp4', help='source')  # file/folder, 0 for webcam
+    # parser.add_argument('--source', type=str, default='rtsp://admin:admin1234@218.153.209.100:502/cam/realmonitor?channel=10&subtype=1', help='source')  # file/folder, 0 for webcam
+    parser.add_argument('--source', type=str, default='./data/videos/80.mp4', help='source')  # file/folder, 0 for webcam
     parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.4, help='object confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.45, help='IOU threshold for NMS')
@@ -618,17 +636,70 @@ def func2():
                 strip_optimizer(opt.weights)
         else:
             detect(opt=opt)
+def gui(q1, q2):
+    im_src = cv2.imread('ch_b1.png')
     
+    car_width = 40
+    car_length = 113
+    c1_track = []
+    c2_track = []
+    while True:
+        now_frame = []
+        next_track =[]
+        dst2 = im_src.copy()
+        while q1.qsize() != 0:
+            point = q1.get()
+            a = point[0]
+            b = point[1]
+            now_frame.append([a,b])
+        
+        now_frame.sort()
+
+        while q2.qsize() != 0:
+            point = q2.get()
+            a = point[0]
+            b = point[1]
+            next_track.append([a,b])
+
+        next_track.sort()
+        
+        if len(now_frame) == 1 and len(c1_track) == 0:
+            c2_track.append(now_frame[0])
+        elif len(now_frame) == 1 and len(c2_track) != 0:
+            c1_track.append(now_frame[0])
+        elif len(now_frame) == 2:
+            c1_track.append(now_frame[0])
+            c2_track.append(now_frame[1])
+        
+
+        if len(next_track) == 1:
+            c2_track.append(next_track[0])
+        elif len(next_track) == 2:
+            c1_track.append(next_track[0])
+            c2_track.append(next_track[1])
+        
+        for i in range(len(c2_track)):
+            cv2.circle(dst2, (c2_track[i][0],c2_track[i][1]), 10, (0,0,255), -1)
+        for i in range(len(c1_track)):
+            cv2.circle(dst2, (c1_track[i][0],c1_track[i][1]), 10, (255,0,0), -1)
+        dst2 = cv2.resize(dst2, dsize=(0, 0), fx=0.1, fy=0.1, interpolation=cv2.INTER_AREA)
+        cv2.imshow('Parking lot', dst2)
+        cv2.waitKey(1)
+
 if __name__ == '__main__':
 
     # 프로세스를 생성합니다
-    p1 = Process(target=func1) #함수 1을 위한 프로세스
-    p2 = Process(target=func2) #함수 2을 위한 프로세스
-
+    q1 = Queue()
+    q2 = Queue()
+    p1 = Process(target=func1, args=(q1,)) #함수 1을 위한 프로세스
+    p2 = Process(target=func2, args=(q2,)) #함수 2을 위한 프로세스
+    p3 = Process(target=gui, args=(q1,q2,))
     # start로 각 프로세스를 시작합니다. func1이 끝나지 않아도 func2가 실행됩니다.
     p1.start()
     p2.start()
-
+    p3.start()
+    
     # join으로 각 프로세스가 종료되길 기다립니다 p1.join()이 끝난 후 p2.join()을 수행합니다
     p1.join()
     p2.join()
+    p3.join()

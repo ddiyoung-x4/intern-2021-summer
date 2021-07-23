@@ -1,3 +1,4 @@
+from multiprocessing import Process, Queue
 import argparse
 import time
 from pathlib import Path
@@ -5,7 +6,9 @@ import numpy as np
 import cv2
 import torch
 import torch.backends.cudnn as cudnn
-from numpy import True_, random
+from numpy import random
+import random
+import math
 import homo_point
 
 from models.experimental import attempt_load
@@ -15,19 +18,19 @@ from utils.general import check_img_size, check_requirements, check_imshow, non_
 from utils.plots import plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
-
-def detect(opt):  # Homography 매칭에 사용되는 행렬값 입력받아야함
+def detect(opt, queue, sync, cam_num):  # Homography 매칭에 사용되는 행렬값 입력받아야함
     source, weights, view_img, save_txt, imgsz = opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size
     save_img = not opt.nosave and not source.endswith('.txt')  # save inference images
     webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
         ('rtsp://', 'rtmp://', 'http://', 'https://'))
 
-    # rect_list = np.array([[295, 85],[52, 456],[648, 456],[418, 87]], np.int32) # hunnn 검출 범위 박스(더 멀리있는거까지)
+    # rect_list = np.array([[295, 85],[52, 456],[648, 456],[418, 87]], np.int32)
+    
     # rect_list = np.array([[80, 411], [283, 113], [435, 115], [620, 410]], np.int32)  # 차량 검출 범위 박스 80
     # rect_list = np.array([[86, 430], [279, 119], [435, 120], [622, 417]], np.int32)  # 차량 검출 범위 박스 79
     # rect_list = np.array([[267, 132], [96, 406], [648, 416], [439, 128]], np.int32)  # 차량 검출 범위 박스 B2 A75
-    # rect_list = np.array([[270, 116],[441, 117], [646, 411], [57, 411]]) # hunnn 80
-    rect_list = np.array(homo_point.pts_dst[75])
+    rect_list = np.array(homo_point.pts_dst[cam_num])
+
     # Create a black image
     img_b = np.zeros((480, 720, 3), dtype=np.uint8)
     img_b = cv2.fillPoly(img_b, [rect_list], (255, 255, 255))
@@ -42,20 +45,20 @@ def detect(opt):  # Homography 매칭에 사용되는 행렬값 입력받아야�
     # pts_src = np.array([[6872, 1656], [7374, 1664], [7355, 1488], [6880, 1446]])  # 79
     # pts_src = np.array([[7736, 1688], [7396, 1686], [7402, 1439], [7720, 1442]])  # 80
     # pts_src = np.array([[21072, 934], [20743, 909], [20735, 1142], [21073, 1130]])  # B2 A75
+    # pts_src = np.array([[7443,1699],[7163,1427],[7945,1425],[7943,1699]]) # nakkk
     # pts_src = np.array([[6823, 1699],[6823, 1421],[7382, 1421],[7382, 1695]]) #hunnn 79
-    # pts_src = np.array([[7382, 1695], [7382, 1421], [7948, 1421], [7944, 1695]]) # hunnn 80
-    pts_src = np.array(homo_point.pts_src[75])
+    pts_src = np.array(homo_point.pts_src[cam_num])
     cv2.polylines(im_src, [pts_src], True, (0, 0, 0), 2)
     im_dst = cv2.imread('cam80.png')
     # pts_dst = np.array([[268, 130], [84, 428], [640, 407], [433, 121]])  # 79
     # pts_dst = np.array([[202, 182], [259, 117], [448, 118], [506, 183]])  # 80
     # pts_dst = np.array([[245, 130], [96, 296], [610, 289], [461, 128]])  # B2 A75
+    # pts_dst = np.array([[263,122],[424,91],[650,405],[54,406]]) # nakkk
     # pts_dst = np.array([[264, 130],[441, 126], [667, 414],[63, 430]]) # hunnn 79
-    # pts_dst = np.array([[270, 116],[441, 117], [646, 411], [57, 411]]) # hunnn 80
-    pts_dst = np.array(homo_point.pts_dst[75])
+    pts_dst = np.array(homo_point.pts_dst[cam_num])
     cv2.polylines(im_dst, [pts_dst], True, (255, 255, 255), 2)
     h1, status = cv2.findHomography(pts_dst, pts_src)
-    
+
     # Directories
     save_dir = Path(increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok))  # increment run
     (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
@@ -97,7 +100,13 @@ def detect(opt):  # Homography 매칭에 사용되는 행렬값 입력받아야�
         model(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters())))  # run once
     t0 = time.time()
 
+    # data_list = []
+    frame_sync = -1
+
     for path, img, im0s, vid_cap in dataset:  # 이미지 처리 시작, 영상의 경우 한장씩
+        frame_sync += 1
+        if frame_sync % sync != 0:
+            continue
         img = torch.from_numpy(img).to(device)
         img = img.half() if half else img.float()  # uint8 to fp16/32
         img /= 255.0  # 0 - 255 to 0.0 - 1.0
@@ -178,14 +187,14 @@ def detect(opt):  # Homography 매칭에 사용되는 행렬값 입력받아야�
                         if names[int(cls)] == 'car'and dist == 1:
                             label = f'{names[int(cls)]}'
                             xyxy_ = [int(xyxy[0]), int(xyxy[1]), int(xyxy[2]) - int(xyxy[0]),
-                                     int(xyxy[3]) - int(xyxy[1])]
+                                    int(xyxy[3]) - int(xyxy[1])]
                             data_list.append(xyxy_)
                             # x1, y1 = (int(xyxy[0]) + int(xyxy[2])) / 2, (int(xyxy[1]) + int(xyxy[3])) / 2  # 중심점 좌표 x, y
                             #  크기? 중심점 위치? 를 사용하여 디텍팅 되는 차량을 한정지음
 
                             plot_one_box(xyxy, im0, label=label, color=colors[int(cls)], line_thickness=2)
-                            # 차량 탐지 정확도 출력
                             cv2.putText(im0, str(conf), (xyxy_[0], xyxy_[1]), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1, cv2.LINE_AA)
+
             # data_list.append(dat)  # dat: 검출된 box xy 좌표 배열 목록
 
             # Print time (inference + NMS)
@@ -219,19 +228,24 @@ def detect(opt):  # Homography 매칭에 사용되는 행렬값 입력받아야�
             p_point.T
             np.transpose(p_point)
             Cal = h1 @ p_point
+            # global ArealC
+            # ArealC = Cal / Cal[2]
+            # a = round(int(ArealC[0]), 0)  # 중심점 x 좌표
+            # b = round(int(ArealC[1]), 0)  # 중심점 y 좌표
             realC = Cal / Cal[2]
-            print(realC)
             a = round(int(realC[0]), 0)  # 중심점 x 좌표
             b = round(int(realC[1]), 0)  # 중심점 y 좌표
+            
+            queue.put([a, b])
+            car_width = 40  # 지도 차량 크기 변수 (2.5m : 64px)
+            car_length = 90 # 6m
 
-            car_width = 40 # 2.5m 64px 
-            car_length = 113 # 6m 153px line width 40
             cv2.rectangle(dst2, (a - car_length, b - car_width//2), (a , b + car_width//2), (0, 0, -255), car_width)
             # cv2.circle(im_src, (a, b), 10, (0, 0, -255), -1)
 
         if len(data_list) != 0:
             dst2 = cv2.resize(dst2, dsize=(0, 0), fx=0.1, fy=0.1, interpolation=cv2.INTER_AREA)
-            cv2.imshow("Source Image", dst2)
+            # cv2.imshow("Source Image", dst2)
         #  바둑판 그리기
         # for k in range(0, 14):
         #     cv2.line(im0, (k * 50, 0), (k * 50, 480), (120, 120, 120), 1, 1)
@@ -251,12 +265,11 @@ def detect(opt):  # Homography 매칭에 사용되는 행렬값 입력받아야�
     #     print(f"Results saved to {save_dir}{s}")
     #
     # print(f'Done. ({time.time() - t0:.3f}s)')
-
-
-if __name__ == '__main__':
+def execute_tracking(q_num, cam_num, frame_sync):
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default='yolov5s.pt', help='model.pt path(s)')
-    parser.add_argument('--source', type=str, default='data/videos/75.mp4', help='source')  # file/folder, 0 for webcam
+    # parser.add_argument('--source', type=str, default='rtsp://admin:admin1234@218.153.209.100:502/cam/realmonitor?channel=9&subtype=1', help='source')  # file/folder, 0 for webcam
+    parser.add_argument('--source', type=str, default=f'./data/videos/{cam_num}.mp4', help='source')  # file/folder, 0 for webcam
     parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.4, help='object confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.45, help='IOU threshold for NMS')
@@ -291,4 +304,126 @@ if __name__ == '__main__':
                 detect(opt=opt)
                 strip_optimizer(opt.weights)
         else:
-            detect(opt=opt)
+            detect(opt=opt, queue=q_num, sync=frame_sync, cam_num=cam_num)
+
+def gui(q):
+    # q1 = q[0]
+    # q2 = q[1]
+    # q3 = q[2]
+    # q4 = q[3]
+    im_src = cv2.imread('ch_b1.png')
+    
+    car_width = 40
+    car_length = 113
+    c1_track = [[]]
+    for i in range(4):
+        c1_track.append([])
+    c2_track = [[]]
+    for i in range(4):
+        c2_track.append([])
+    c_track = []
+    # car_track = [[]]
+    criteria = 0
+    while True:
+        
+        # next_track =[]
+        # now1_frame = []
+        # next1_track = []
+        dst2 = im_src.copy()
+        for process in range(len(q)):
+            now_frame = []
+            while q[process].qsize() != 0:                
+                point = q[process].get()
+                a = point[0]
+                b = point[1]
+                now_frame.append([a,b])
+
+            now_frame.sort()
+            print('now frame: ', now_frame)        
+            if len(now_frame) == 1:
+                c2_track[process].append(now_frame[0])
+            elif len(now_frame) == 2:
+                c1_track[process].append(now_frame[0])
+                c2_track[process].append(now_frame[1])
+
+            ################################################################################################################
+            # if len(now_frame) == 1: # 차량 1대만 detection
+            #     if len(c1_track[process]) == 0: # 앞차량만 있을때
+            #         c2_track[process].append(now_frame[0])
+            #     elif len(c2_track[process]) != 0: # 앞차량이 가다가 사라지고 뒤차량만 남아있을 때
+            #         c2_track[process] = []
+            #         c1_track[process].append(now_frame[0])
+            # # elif len(now_frame) == 0: # 차량 0대 detection
+            # #     if len(c2_track[process]) != 0: # 앞차량이 가다가 사라질때, 근데 now_frame에서 못잡은 거라면??
+            # #         c2_track[process] = [] 
+            # #     elif len(c1_track[process]) != 0: # 뒤차량이 가다가 사라질때, 근데 now_frame에서 못잡은 거라면??
+            # #         c1_track = []
+            # elif len(now_frame) == 2: # 두차량 모두 있을때
+            #     c1_track[process].append(now_frame[0])
+            #     c2_track[process].append(now_frame[1])
+         
+            # if process >= 1 and len(c2_track[process]) != 0 and c2_track[process][0][0] - c2_track[process-1][-1][0] < 153: # 겹치는 부분에 있을때
+            #     c_track = c2_track[process-1]
+            #     c_track.extend(c2_track[process])
+            #     sorted(set(c_track), key=lambda x: c_track.index(x))
+
+            # for a,b in c_track:
+                # cv2.circle(dst2, (a,b), 10, (0,255,0), -1)
+    
+            #####################################################################################################################
+        
+       
+        for i in range(len(c2_track)):
+            cv2.circle(dst2, (c2_track[i][0],c2_track[i][1]), 10, (0,0,255), -1)
+        for i in range(len(c1_track)):
+            cv2.circle(dst2, (c1_track[i][0],c1_track[i][1]), 10, (255,0,0), -1)
+
+    
+        #########################################################################################
+        dst2 = cv2.resize(dst2, dsize=(0, 0), fx=0.1, fy=0.1, interpolation=cv2.INTER_AREA)
+        cv2.imshow('Parking lot', dst2)
+        cv2.waitKey(1)
+
+if __name__ == '__main__':
+
+    # 프로세스를 생성합니다
+    q1 = Queue()
+    q2 = Queue()
+    q3 = Queue()
+    q4 = Queue()
+    q = []
+    p = []
+    test_camera = [77, 78, 79, 80]
+    for idx in range(len(test_camera)):
+        q.append(Queue())
+        sync = 2*2
+        if test_camera[idx] == 79:
+            sync = 3*2
+        p.append(Process(target=execute_tracking, args=(q[idx], test_camera[idx], sync)))
+
+    p_gui = Process(target=gui, args=(q, ))
+    # p1 = Process(target=execute_tracking, args=(q1, 77, 2)) #함수 1을 위한 프로세스
+    # p2 = Process(target=execute_tracking, args=(q2, 78, 2)) #함수 2을 위한 프로세스
+    # p3 = Process(target=execute_tracking, args=(q3, 79, 3)) #함수 1을 위한 프로세스
+    # p4 = Process(target=execute_tracking, args=(q4, 80, 2)) #함수 2을 위한 프로세스 
+    # p5 = Process(target=gui, args=(q1,q2,q3,q4, ))
+    # start로 각 프로세스를 시작합니다. func1이 끝나지 않아도 func2가 실행됩니다.
+    # p1.start()
+    # p2.start()
+    # p3.start()
+    # p4.start()
+    # p5.start()
+    
+    # # join으로 각 프로세스가 종료되길 기다립니다 p1.join()이 끝난 후 p2.join()을 수행합니다
+    # p1.join()
+    # p2.join()
+    # p3.join()
+    # p4.join()
+    # p5.join()
+    for idx in range(len(test_camera)):
+        p[idx].start()
+    p_gui.start()
+
+    for idx in range(len(test_camera)):
+        p[idx].join()
+    p_gui.join()
