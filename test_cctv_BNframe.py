@@ -9,7 +9,7 @@ import torch.backends.cudnn as cudnn
 from numpy import random
 import random
 import math
-import homo_point
+import homo_point, api
 
 from models.experimental import attempt_load
 from utils.datasets import LoadStreams, LoadImages
@@ -268,7 +268,8 @@ def detect(opt, queue, sync, cam_num):  # Homography 매칭에 사용되는 행�
 def execute_tracking(q_num, cam_num, frame_sync):
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default='yolov5s.pt', help='model.pt path(s)')
-    # parser.add_argument('--source', type=str, default='rtsp://admin:admin1234@218.153.209.100:502/cam/realmonitor?channel=9&subtype=1', help='source')  # file/folder, 0 for webcam
+    cam = cam_num - 70
+    # parser.add_argument('--source', type=str, default=f'rtsp://admin:admin1234@218.153.209.100:502/cam/realmonitor?channel={cam}&subtype=1', help='source')  # file/folder, 0 for webcam
     parser.add_argument('--source', type=str, default=f'./data/videos/{cam_num}.mp4', help='source')  # file/folder, 0 for webcam
     parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.4, help='object confidence threshold')
@@ -306,6 +307,41 @@ def execute_tracking(q_num, cam_num, frame_sync):
         else:
             detect(opt=opt, queue=q_num, sync=frame_sync, cam_num=cam_num)
 
+def find_parking_position(x, y):
+    spot = api.get_parking_spot() # 한번 call할때마다 api를 불러오는 것이 비효율적이라면 parking_position.py에서 가져다 쓰는 것이 더 좋은 방법
+    width = 64
+    height = 128
+    margin = 3
+    position = ''
+    for key in spot:
+        top = spot[key]['top']
+        left = spot[key]['left']
+        if left-margin <= x < left+width+margin and top-margin <= y < top+height+margin:
+            position = key
+            break
+    return position
+
+def find_parking_cam_num(x, y):
+    height = 128 # 카메라가 보는 양옆 주차공간까지
+    for cam_num in homo_point.pts_src:
+        x1 = homo_point.pts_src[cam_num][1][0] # top left
+        y1 = homo_point.pts_src[cam_num][1][1]
+        x2 = homo_point.pts_src[cam_num][3][0]
+        y2 = homo_point.pts_src[cam_num][3][1] # bottom right
+
+        if x1 <= x < x2 and y1-height < y <= y2+height:
+            return cam_num
+
+def get_start_time():
+    tm = time.localtime()
+    hour = tm.tm_hour
+    min = tm.tm_min
+    sec = tm.tm_sec
+    tm_str = f'{hour:02d}:{min:02d}:{sec:02d}'
+
+    return tm_str
+
+
 def extract_from_queue(q):
     
     now_frame = [[]]
@@ -321,28 +357,50 @@ def extract_from_queue(q):
                 id_list.append(id)
         now_frame.append([])
     return now_frame
+
+def format_frame(num):
+    frame = [[]]
+    for i in range(num):
+        frame.append([])
     
+    return frame
+
 def gui(q):
     im_src = cv2.imread('ch_b1.png')
     
     car_width = 40
     car_length = 113
-    
+    tracking_point = [[]]
     before_frame = [[]]
+    for i in range(20):
+        tracking_point.append([])
     for i in range(len(q)):
         before_frame.append([])
-
+    start_time = ''
+    end_flag = 0
     while True:
         dst2 = im_src.copy()
         
-        id = random.randint(1, 20)
         now_frame = extract_from_queue(q)
 
+        # 차량이 입차인지 아닌지
+        if len(now_frame[0]) != 0 and len(before_frame[0]) != 0: # process 번호는 상황에 맞게 변경시켜줘야함
+            x = now_frame[0][0][0]
+            y = now_frame[0][0][1]
+            if 5736 <= x < 6198 and  1693 <= y < 1821: # 입차 구역 범위
+                # start_time = get_start_time()
+                start_time = '09:30:26'
+                print('###############')
+                print(start_time)
+                print('###############')
+
+
+        # 이전 프레임의 ID를 현재 프레임으로 넘겨주기
         idx = 0
-        for process in range(len(q)):
-            for i in range(len(now_frame[process])):
+        for process in range(len(q)): # Detection 중인 카메라 개수
+            for i in range(len(now_frame[process])): # 현재 프레임의 차량 검출 개수
                 MIN_dist = 10000000 # dummy value
-                for j in range(len(before_frame[process])):
+                for j in range(len(before_frame[process])): # 이전 프레임의 차량 검출 개수
                     dist = math.sqrt((before_frame[process][j][0]-now_frame[process][i][0])**2 + (before_frame[process][j][1]-now_frame[process][i][1])**2)
                     if MIN_dist > dist:
                         MIN_dist = dist
@@ -350,12 +408,23 @@ def gui(q):
                 if len(before_frame[process]) != 0:
                     now_frame[process][i][2] = before_frame[process][idx][2]
 
-        for process in range(1, len(q)):    
-            if len(now_frame[process]) != 0:
-                if now_frame[process][0][0] - before_frame[process-1][-1][0] < 153:
-                    now_frame[process][0][2] = before_frame[process-1][-1][2]
+                # track point 저장
+                tracking_point[now_frame[process][i][2]].append(now_frame[process][i])
+            
+        for id in range(1, 20):
+            if len(tracking_point[id]) != 0:
+                print(f'tracking point[{id}]: ', tracking_point[id])
+        # 카메라 넘어가는 시점에 ID 넘겨주기
+        for process in range(1, len(q)):
+            if len(now_frame[process]) != 0 and len(before_frame[process-1]) != 0:
+                id = before_frame[process-1][-1][2]
+                if now_frame[process][0][0] - tracking_point[id][-1][0] < 153:
+                    now_frame[process][0][2] = id
+                    # id 넘겨줬으면 pop
+                    # before_frame[process-1].pop()
 
-
+        
+        # 주차장 지도에 출력
         for process in range(len(q)):
 
             print(f'before_frame{process}: ', before_frame[process])
@@ -363,21 +432,43 @@ def gui(q):
 
             if len(now_frame[process]) != 0:
                 before_frame[process] = now_frame[process]
-                for i in range(len(now_frame[process])):
-                    cv2.circle(dst2, (now_frame[process][i][0], now_frame[process][i][1]), 10, (255, 0, 0), -1)
-                    cv2.putText(dst2, f'{now_frame[process][i][2]}', (now_frame[process][i][0], now_frame[process][i][1]), cv2.FONT_HERSHEY_SIMPLEX, 20, (255,0,0), 2)
+            #     for i in range(len(now_frame[process])):
+            #         cv2.circle(dst2, (now_frame[process][i][0], now_frame[process][i][1]), 10, (0, 0, 255), -1)
+            #         cv2.putText(dst2, f'{now_frame[process][i][2]}', (now_frame[process][i][0], now_frame[process][i][1]), cv2.FONT_HERSHEY_SIMPLEX, 20, (0,0,255), 2)
+        #########################################################################################
+        for id in range(1, 20):
+            for i in range(len(tracking_point[id])):
+                
+                cv2.circle(dst2, (tracking_point[id][i][0], tracking_point[id][i][1]), 10, (0, 0, 255), -1)
+                # cv2.putText(dst2, f'{tracking_point[id][0][2]}', (tracking_point[id][i][0], tracking_point[id][i][1]),cv2.FONT_HERSHEY_SIMPLEX, 20, (0,0,255), 2)
+        #########################################################################################
+        # trakcing_point의 마지막점을 통해 주차 기둥 위치 탐색
+        for id in range(1, 20):
+            if len(tracking_point[id]) != 0:
+                pos = find_parking_position(tracking_point[id][-1][0], tracking_point[id][-1][1])
+                if pos:
+                    print('##################')
+                    print('parking Lot: ', pos)
+                    print('##################')
+                    cam_num = find_parking_cam_num(tracking_point[id][-1][0], tracking_point[id][-1][1])
+                    print('CAM NUM: ', cam_num)
+                    print('##################')
+                    cv2.putText(dst2,f'Position: {pos}, CAM_NUM: {cam_num}', (tracking_point[id][-1][0], tracking_point[id][-1][1]), cv2.FONT_HERSHEY_PLAIN, 10, (0, 0, 255), 2, cv2.LINE_AA)
+                    print('start time: ', start_time)
+                    end_flag = 1
+                # tracking 차량의 마지막 카메라 위치
+                
         #########################################################################################
         dst2 = cv2.resize(dst2, dsize=(0, 0), fx=0.1, fy=0.1, interpolation=cv2.INTER_AREA)
         cv2.imshow('Parking lot', dst2)
         cv2.waitKey(1)
 
+        if end_flag == 1:
+            time.sleep(10)
+            break
 if __name__ == '__main__':
 
     # 프로세스를 생성합니다
-    q1 = Queue()
-    q2 = Queue()
-    q3 = Queue()
-    q4 = Queue()
     q = []
     p = []
     test_camera = [77, 78, 79, 80]
