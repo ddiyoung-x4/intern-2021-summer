@@ -18,6 +18,10 @@ from utils.general import check_img_size, check_requirements, check_imshow, non_
 from utils.plots import plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
+# global variable 
+start_time = str()
+record = {}
+
 def detect(opt, queue, sync, cam_num):  # Homography 매칭에 사용되는 행렬값 입력받아야함
     source, weights, view_img, save_txt, imgsz = opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size
     save_img = not opt.nosave and not source.endswith('.txt')  # save inference images
@@ -102,6 +106,15 @@ def detect(opt, queue, sync, cam_num):  # Homography 매칭에 사용되는 행�
 
     # data_list = []
     frame_sync = -1
+    # 차량이 주차장에 들어와 처음 detection된 시점을 구하기 위해
+    global start_time
+    source_split = source.split('_') # source = 192.168.8.251_ch{cam}_20210722093015_20200722093100
+    year = source_split[2][:4]
+    month = source_split[2][4:6]
+    day = source_split[2][6:8]
+    hour = int(source_split[2][8:10])
+    min = int(source_split[2][10:12])
+    sec = int(source_split[2][12:])
 
     for path, img, im0s, vid_cap in dataset:  # 이미지 처리 시작, 영상의 경우 한장씩
         frame_sync += 1
@@ -185,6 +198,20 @@ def detect(opt, queue, sync, cam_num):  # Homography 매칭에 사용되는 행�
 
                         # if names[int(cls)] == 'car' or names[int(cls)] == 'person':  # box 가 차량이나 사람일 경우
                         if names[int(cls)] == 'car'and dist == 1:
+                            # 1번째 detection만 동작
+                            if not start_time and cam_num == 77:
+                                sec += frame_sync*0.05
+                                if sec >= 60:
+                                    sec = sec - 60
+                                    min = min + 1
+                                    if min >= 60:
+                                        min = min - 60
+                                        hour = hour + 1
+                                start_time = f'{hour:02d}{min:02d}{sec}'
+                                print('###################')
+                                print('TIME: ', start_time)
+                                print()
+                                
                             label = f'{names[int(cls)]}'
                             xyxy_ = [int(xyxy[0]), int(xyxy[1]), int(xyxy[2]) - int(xyxy[0]),
                                     int(xyxy[3]) - int(xyxy[1])]
@@ -268,9 +295,13 @@ def detect(opt, queue, sync, cam_num):  # Homography 매칭에 사용되는 행�
 def execute_tracking(q_num, cam_num, frame_sync):
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default='yolov5s.pt', help='model.pt path(s)')
-    cam = cam_num - 70
+    cam = cam_num % 70
+    channel = f'192.168.8.251_ch{cam}_'
+    start = '20210722093015'
+    finish = '20210722093100'
+    file = channel + start + '_' + finish
     # parser.add_argument('--source', type=str, default=f'rtsp://admin:admin1234@218.153.209.100:502/cam/realmonitor?channel={cam}&subtype=1', help='source')  # file/folder, 0 for webcam
-    parser.add_argument('--source', type=str, default=f'./data/videos/{cam_num}.mp4', help='source')  # file/folder, 0 for webcam
+    parser.add_argument('--source', type=str, default=f'./data/videos/{file}.mp4', help='source')  # file/folder, 0 for webcam
     parser.add_argument('--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.4, help='object confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.45, help='IOU threshold for NMS')
@@ -332,16 +363,6 @@ def find_parking_cam_num(x, y):
         if x1 <= x < x2 and y1-height < y <= y2+height:
             return cam_num
 
-def get_start_time():
-    tm = time.localtime()
-    hour = tm.tm_hour
-    min = tm.tm_min
-    sec = tm.tm_sec
-    tm_str = f'{hour:02d}:{min:02d}:{sec:02d}'
-
-    return tm_str
-
-
 def extract_from_queue(q):
     
     now_frame = [[]]
@@ -376,23 +397,22 @@ def gui(q):
         tracking_point.append([])
     for i in range(len(q)):
         before_frame.append([])
-    start_time = ''
     end_flag = 0
     while True:
         dst2 = im_src.copy()
         
         now_frame = extract_from_queue(q)
 
-        # 차량이 입차인지 아닌지
-        if len(now_frame[0]) != 0 and len(before_frame[0]) != 0: # process 번호는 상황에 맞게 변경시켜줘야함
-            x = now_frame[0][0][0]
-            y = now_frame[0][0][1]
-            if 5736 <= x < 6198 and  1693 <= y < 1821: # 입차 구역 범위
-                # start_time = get_start_time()
-                start_time = '09:30:26'
-                print('###############')
-                print(start_time)
-                print('###############')
+        # # 차량이 입차인지 아닌지
+        # if len(now_frame[0]) != 0 and len(before_frame[0]) != 0: # process 번호는 상황에 맞게 변경시켜줘야함
+        #     x = now_frame[0][0][0]
+        #     y = now_frame[0][0][1]
+        #     if 5736 <= x < 6198 and  1693 <= y < 1821: # 입차 구역 범위
+        #         # start_time = get_start_time()
+        #         start_time = '09:30:26'
+        #         print('###############')
+        #         print(start_time)
+        #         print('###############')
 
 
         # 이전 프레임의 ID를 현재 프레임으로 넘겨주기
@@ -455,6 +475,11 @@ def gui(q):
                     print('##################')
                     cv2.putText(dst2,f'Position: {pos}, CAM_NUM: {cam_num}', (tracking_point[id][-1][0], tracking_point[id][-1][1]), cv2.FONT_HERSHEY_PLAIN, 10, (0, 0, 255), 2, cv2.LINE_AA)
                     print('start time: ', start_time)
+                    l = []
+                    l.append(start_time)
+                    l.append(pos)
+                    l.append(cam_num)
+                    record[id] = l
                     end_flag = 1
                 # tracking 차량의 마지막 카메라 위치
                 
@@ -478,26 +503,8 @@ if __name__ == '__main__':
         if test_camera[idx] == 79:
             sync = 3*2
         p.append(Process(target=execute_tracking, args=(q[idx], test_camera[idx], sync)))
-
     p_gui = Process(target=gui, args=(q, ))
-    # p1 = Process(target=execute_tracking, args=(q1, 77, 2)) #함수 1을 위한 프로세스
-    # p2 = Process(target=execute_tracking, args=(q2, 78, 2)) #함수 2을 위한 프로세스
-    # p3 = Process(target=execute_tracking, args=(q3, 79, 3)) #함수 1을 위한 프로세스
-    # p4 = Process(target=execute_tracking, args=(q4, 80, 2)) #함수 2을 위한 프로세스 
-    # p5 = Process(target=gui, args=(q1,q2,q3,q4, ))
-    # start로 각 프로세스를 시작합니다. func1이 끝나지 않아도 func2가 실행됩니다.
-    # p1.start()
-    # p2.start()
-    # p3.start()
-    # p4.start()
-    # p5.start()
-    
-    # # join으로 각 프로세스가 종료되길 기다립니다 p1.join()이 끝난 후 p2.join()을 수행합니다
-    # p1.join()
-    # p2.join()
-    # p3.join()
-    # p4.join()
-    # p5.join()
+
     for idx in range(len(test_camera)):
         p[idx].start()
     p_gui.start()
@@ -505,3 +512,5 @@ if __name__ == '__main__':
     for idx in range(len(test_camera)):
         p[idx].join()
     p_gui.join()
+
+    print(record)
