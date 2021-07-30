@@ -1,4 +1,4 @@
-from multiprocessing import Process, Queue
+from multiprocessing import Manager, Process, Queue
 import argparse
 import time
 from pathlib import Path
@@ -19,10 +19,8 @@ from utils.plots import plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_synchronized
 
 # global variable 
-start_time = str()
-record = {}
 
-def detect(opt, queue, sync, cam_num):  # Homography 매칭에 사용되는 행렬값 입력받아야함
+def detect(opt, queue, sync, cam_num, record):  # Homography 매칭에 사용되는 행렬값 입력받아야함
     source, weights, view_img, save_txt, imgsz = opt.source, opt.weights, opt.view_img, opt.save_txt, opt.img_size
     save_img = not opt.nosave and not source.endswith('.txt')  # save inference images
     webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
@@ -105,9 +103,12 @@ def detect(opt, queue, sync, cam_num):  # Homography 매칭에 사용되는 행�
     t0 = time.time()
 
     # data_list = []
+
+    # cctv마다 frame sync가 맞지 않음 20FPS or 30FPS
     frame_sync = -1
     # 차량이 주차장에 들어와 처음 detection된 시점을 구하기 위해
-    global start_time
+    
+    start_time = ''
     source_split = source.split('_') # source = 192.168.8.251_ch{cam}_20210722093015_20200722093100
     year = source_split[2][:4]
     month = source_split[2][4:6]
@@ -117,9 +118,7 @@ def detect(opt, queue, sync, cam_num):  # Homography 매칭에 사용되는 행�
     sec = int(source_split[2][12:])
 
     for path, img, im0s, vid_cap in dataset:  # 이미지 처리 시작, 영상의 경우 한장씩
-        frame_sync += 1
-        if frame_sync % sync != 0:
-            continue
+        
         img = torch.from_numpy(img).to(device)
         img = img.half() if half else img.float()  # uint8 to fp16/32
         img /= 255.0  # 0 - 255 to 0.0 - 1.0
@@ -133,7 +132,9 @@ def detect(opt, queue, sync, cam_num):  # Homography 매칭에 사용되는 행�
         # Apply NMS
         pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms)
         t2 = time_synchronized()
-
+        frame_sync += 1
+        if frame_sync % sync != 0:
+            continue
         # Apply Classifier
         if classify:
             pred = apply_classifier(pred, modelc, img, im0s)
@@ -211,6 +212,7 @@ def detect(opt, queue, sync, cam_num):  # Homography 매칭에 사용되는 행�
                                 print('###################')
                                 print('TIME: ', start_time)
                                 print()
+                                record.append(start_time)
                                 
                             label = f'{names[int(cls)]}'
                             xyxy_ = [int(xyxy[0]), int(xyxy[1]), int(xyxy[2]) - int(xyxy[0]),
@@ -292,7 +294,7 @@ def detect(opt, queue, sync, cam_num):  # Homography 매칭에 사용되는 행�
     #     print(f"Results saved to {save_dir}{s}")
     #
     # print(f'Done. ({time.time() - t0:.3f}s)')
-def execute_tracking(q_num, cam_num, frame_sync):
+def execute_tracking(q_num, cam_num, frame_sync, record):
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', nargs='+', type=str, default='yolov5s.pt', help='model.pt path(s)')
     cam = cam_num % 70
@@ -336,7 +338,7 @@ def execute_tracking(q_num, cam_num, frame_sync):
                 detect(opt=opt)
                 strip_optimizer(opt.weights)
         else:
-            detect(opt=opt, queue=q_num, sync=frame_sync, cam_num=cam_num)
+            detect(opt=opt, queue=q_num, sync=frame_sync, cam_num=cam_num, record=record)
 
 def find_parking_position(x, y):
     spot = api.get_parking_spot() # 한번 call할때마다 api를 불러오는 것이 비효율적이라면 parking_position.py에서 가져다 쓰는 것이 더 좋은 방법
@@ -367,15 +369,13 @@ def extract_from_queue(q):
     
     now_frame = [[]]
     for process in range(len(q)):
-        id_list = []
+        id = process
         while q[process].qsize() != 0:                
             point = q[process].get()
             a = point[0]
             b = point[1]
-            id = random.randint(1, 20)
-            if id not in id_list:
-                now_frame[process].append([a,b,id])
-                id_list.append(id)
+            now_frame[process].append([a,b,id])
+            id += 1
         now_frame.append([])
     return now_frame
 
@@ -386,7 +386,7 @@ def format_frame(num):
     
     return frame
 
-def gui(q):
+def gui(q, record):
     im_src = cv2.imread('ch_b1.png')
     
     car_width = 40
@@ -431,7 +431,7 @@ def gui(q):
                 # track point 저장
                 tracking_point[now_frame[process][i][2]].append(now_frame[process][i])
             
-        for id in range(1, 20):
+        for id in range(0, 20):
             if len(tracking_point[id]) != 0:
                 print(f'tracking point[{id}]: ', tracking_point[id])
         # 카메라 넘어가는 시점에 ID 넘겨주기
@@ -456,14 +456,14 @@ def gui(q):
             #         cv2.circle(dst2, (now_frame[process][i][0], now_frame[process][i][1]), 10, (0, 0, 255), -1)
             #         cv2.putText(dst2, f'{now_frame[process][i][2]}', (now_frame[process][i][0], now_frame[process][i][1]), cv2.FONT_HERSHEY_SIMPLEX, 20, (0,0,255), 2)
         #########################################################################################
-        for id in range(1, 20):
+        for id in range(0, 20):
             for i in range(len(tracking_point[id])):
                 
                 cv2.circle(dst2, (tracking_point[id][i][0], tracking_point[id][i][1]), 10, (0, 0, 255), -1)
                 # cv2.putText(dst2, f'{tracking_point[id][0][2]}', (tracking_point[id][i][0], tracking_point[id][i][1]),cv2.FONT_HERSHEY_SIMPLEX, 20, (0,0,255), 2)
         #########################################################################################
         # trakcing_point의 마지막점을 통해 주차 기둥 위치 탐색
-        for id in range(1, 20):
+        for id in range(0, 20):
             if len(tracking_point[id]) != 0:
                 pos = find_parking_position(tracking_point[id][-1][0], tracking_point[id][-1][1])
                 if pos:
@@ -474,12 +474,10 @@ def gui(q):
                     print('CAM NUM: ', cam_num)
                     print('##################')
                     cv2.putText(dst2,f'Position: {pos}, CAM_NUM: {cam_num}', (tracking_point[id][-1][0], tracking_point[id][-1][1]), cv2.FONT_HERSHEY_PLAIN, 10, (0, 0, 255), 2, cv2.LINE_AA)
-                    print('start time: ', start_time)
-                    l = []
-                    l.append(start_time)
-                    l.append(pos)
-                    l.append(cam_num)
-                    record[id] = l
+                    print('start time: ', record[0])
+                    
+                    record.append(pos)
+                    record.append(cam_num)
                     end_flag = 1
                 # tracking 차량의 마지막 카메라 위치
                 
@@ -496,21 +494,25 @@ if __name__ == '__main__':
     # 프로세스를 생성합니다
     q = []
     p = []
+
+    record = Manager().list()
     test_camera = [77, 78, 79, 80]
     for idx in range(len(test_camera)):
         q.append(Queue())
-        sync = 2*2
+        sync = 2*2 # 20FPS 
         if test_camera[idx] == 79:
-            sync = 3*2
-        p.append(Process(target=execute_tracking, args=(q[idx], test_camera[idx], sync)))
-    p_gui = Process(target=gui, args=(q, ))
+            sync = 3*2 # 30FPS
+        p.append(Process(target=execute_tracking, args=(q[idx], test_camera[idx], sync, record)))
+    p_gui = Process(target=gui, args=(q, record))
 
+    # process 시작
     for idx in range(len(test_camera)):
         p[idx].start()
     p_gui.start()
 
+    # process가 작업을 완료할 때까지 기다림
     for idx in range(len(test_camera)):
         p[idx].join()
     p_gui.join()
 
-    print(record)
+    print('RECORD: ', record)
