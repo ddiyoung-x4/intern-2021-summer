@@ -211,13 +211,9 @@ def detect(opt, sync, cam_num, record):  # Homography 매칭에 사용되는 행
                             p_point.T
                             np.transpose(p_point)
                             Cal = h1 @ p_point
-                            # global ArealC
-                            # ArealC = Cal / Cal[2]
-                            # a = round(int(ArealC[0]), 0)  # 중심점 x 좌표
-                            # b = round(int(ArealC[1]), 0)  # 중심점 y 좌표
                             realC = Cal / Cal[2]
                             a = round(int(realC[0]), 0)  # 중심점 x 좌표
-                            b = round(int(realC[1]), 0)  # 중심점 y 좌표
+                            b = round(int(realC[1]), 0)  # 밑바닥 y 좌표
                             
                             
                             # 이전 frame record 없을 때
@@ -360,26 +356,32 @@ def is_enter(x, y):
     for cam_num in homo_point.entrance:
         x1 = homo_point.entrance[cam_num][0][0]
         y1 = homo_point.entrance[cam_num][0][1]
-        x2 = homo_point.entrance[cam_num][0][0]
-        y2 = homo_point.entrance[cam_num][0][1]
+        x2 = homo_point.entrance[cam_num][1][0]
+        y2 = homo_point.entrance[cam_num][1][1]
 
         if x1 <= x < x2 and y1 < y <= y2:
             return True
     return False
 
+def get_start_time(start, time):
+    year = int(start[0:4])
+    month = int(start[4:6])
+    day = int(start[6:8])
+    h = int(start[8:10])
+    m = int(start[10:12])
+    s = int(start[12:])
 
-def extract_from_queue(q):
+    s = s + time
+    if s >= 60:
+        m += 1
+        s -= 60
+        if m >= 60:
+            h += 1
+            m -= 60
     
-    now_frame = [[]]
-    for process in range(len(q)):
-        id_num = None
-        while q[process].qsize() != 0:                
-            point = q[process].get()
-            a = point[0]
-            b = point[1]
-            now_frame[process].append([a,b,id_num])
-        now_frame.append([])
-    return now_frame
+    result = f'{year}{month:02d}{day:02d} {h:02d}:{m:02d}:{s:04.1f}'
+    return result
+
 
 def next_camera(cam):
     next_camera = []
@@ -403,14 +405,22 @@ if __name__ == '__main__':
     # 프로세스를 생성
     p = []
     record = []
-
     id = Manager()
-    test_camera = [77, 78, 79, 80, 24]
+
+    # Camera MP4
+    test_camera = [77, 78, 79, 80, 24] # test case 5-1, 5-3 ->[77,78,79,80,24], test case 5-2 ->[77,78,79,80]
+    # 입차 시간
+    # start = '20210722093015' # case2
+    # start = '20210801120905' # case 3
+    # start = '20210728092930' # case 4
+    # start = '20210728082210' # case 5-1
+    # start = '20210728095145' # case 5-2
+    start = '20210728134600' # caset 5-3ww
+
+    sync = 2 # 원본 영상 20FPS
     for idx in range(len(test_camera)):
         record.append(Manager().list())
-        sync = 2 # 20FPS 
-        # if test_camera[idx] == 79:
-        #     sync = 3 # 30FPS
+        # sync = 1 # 20FPS 
         p.append(Process(target=execute_tracking, args=(test_camera[idx], sync, record[idx])))
 
     # process 시작
@@ -432,35 +442,47 @@ if __name__ == '__main__':
         track_point.append([])
         track_point[i] = temp[i]
 
+    # 카메라 넘어가는 부분 array 스티칭
     for n in range(1, len(test_camera)):
         temp = record[n][0]
-        if len(temp) >= 2:
-            for i in range(len(track_point)): # len(track_point) = 2
-                MIN = 10000000
-                idx = 0
-                
-                for j in range(len(temp)):
-                    frame_gap = abs(track_point[i][-1][0] - temp[j][0][0])
-                    if MIN > frame_gap:
-                        MIN = frame_gap
-                        idx = j
-                track_point[i].extend(temp[idx])
-        else: # len(temp) = 1
+        for i in range(len(track_point)): 
             MIN = 10000000
-            idx = 0
-            for i in range(len(track_point)):
-                frame_gap = abs(track_point[i][-1][0] - temp[0][0][0])
+            idx = -1
+            for j in range(len(temp)):
+                frame_gap = abs(track_point[i][-1][0] - temp[j][0][0])
                 if MIN > frame_gap:
                     MIN = frame_gap
-                    idx = i
-            track_point[idx].extend(temp[0])
+                    idx = j
+            if track_point[i][-1][0] <= temp[idx][0][0]:
+                if check_iou(track_point[i][-1][1], track_point[i][-1][2], temp[idx][0][1], temp[idx][0][2]):
+                    track_point[i].extend(temp[idx])
+            else:
+                s = len(track_point[i])-1
+                f = s - (track_point[i][-1][0] - temp[idx][0][0])//sync
+                if f < 0: f = 0
+                for k in range(s, f, -1): # 20FPS: //1, 10FPS: //2
+                    
+                    if check_iou(track_point[i][k][1], track_point[i][k][2], temp[idx][0][1], temp[idx][0][2]):
+                        
+                        track_point[i].extend(temp[idx])
+                        break
 
     im_src = cv2.imread('ch_b1.png')
     car_color = [[0,0,255],[255,0,0],[0,255,0],[255,255,0],[0,255,255]]
 
+    
+
+    # 입치시간, 주차 위치, 주차시 카메라 번호 확인
+    # 주차장 MAP에 차량 이동 경로 추적 
     for i in range(len(track_point)):
         
-        
+        if is_enter(track_point[i][0][1], track_point[i][0][2]):
+            time = 0.05 * track_point[i][0][0] # 20fps: 0.05 sec per frame
+            InParkingLot = get_start_time(start, time)
+            print('###################')
+            print(f'[{i}]car InPARKING time: ', InParkingLot)
+            print('###################')
+
         print(f'track_point[{i}]', track_point[i])
         for j in range(len(track_point[i])):
             cv2.circle(im_src, (track_point[i][j][1], track_point[i][j][2]), 10, car_color[i], -1)
@@ -471,8 +493,6 @@ if __name__ == '__main__':
             cam_num = find_parking_cam_num(x, y)
             cv2.putText(im_src,f'Position: {pos}, CAM_NUM: {cam_num}', (x, y), cv2.FONT_HERSHEY_PLAIN, 10, car_color[i], 2, cv2.LINE_AA)
 
-
-    
     dst2 = cv2.resize(im_src, dsize=(0, 0), fx=0.1, fy=0.1, interpolation=cv2.INTER_AREA)
     cv2.imshow('parking lot', dst2)
     
