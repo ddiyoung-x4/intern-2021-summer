@@ -10,7 +10,7 @@ import torch.backends.cudnn as cudnn
 from numpy import random
 import random
 import math
-import homo_point, api, parking_position, camera_link
+import homo_point, parking_position, camera_link
 import os
 
 from models.experimental import attempt_load
@@ -415,7 +415,7 @@ if __name__ == '__main__':
     # start = '20210728092930' # case 4
     # start = '20210728082210' # case 5-1
     # start = '20210728095145' # case 5-2
-    start = '20210728134600' # caset 5-3ww
+    start = '20210728134600' # caset 5-3
 
     sync = 2 # 원본 영상 20FPS
     for idx in range(len(test_camera)):
