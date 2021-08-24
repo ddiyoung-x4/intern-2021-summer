@@ -83,7 +83,7 @@ def get_camera_index(cam, CCTV_exist):
     return row, col
 
 
-def watch_cctv(cam_num, row, col, CCTV_OPEN, CCTV_exist,TRIGGER):
+def watch_cctv(cam_num, row, col, CCTV_OPEN, CCTV_exist, car_list):
     time_vector = [[]]
     rect_list = np.array(homo_point.pts_dst[cam_num])
 
@@ -200,18 +200,53 @@ def watch_cctv(cam_num, row, col, CCTV_OPEN, CCTV_exist,TRIGGER):
                                         else:
                                             time_vector.append([])
                                             time_vector[-1].append([time_save, a, b])
-
+                                    
+                                    # 입차할 때만 car_list 생성, 트래킹할 때는 car_list 수정
                                     CCTV_OPEN[row][col] += 1
                                     gen_2nd = next_camera(cam_num)
-                                    g2_row, g2_col = get_camera_index(gen_2nd)
-                                    TRIGGER[g2_row][g2_col] = cam_num                                    
+                                    g2_row, g2_col = get_camera_index(gen_2nd)                                   
                                     CCTV_OPEN[g2_row][g2_col] += 1
                                     gen_3rd = next_camera(gen_2nd)
                                     g3_row, g3_col = get_camera_index(gen_3rd)
-                                    TRIGGER[g3_row][g3_col]
                                     CCTV_OPEN[g3_row][g3_col] += 1
+                                    car_list.append([[cam_num], [gen_2nd], [gen_3rd]])
+                            
+                            # 하나의 car list에서 2번째 있는 카메라 번호와 일치한지
+                            # 새로운 3세대 추가
+                            # 기존 1세대 제거, 2->1, 3->2 세대 변환
+                            r_idx = 0
+                            for r in range(len(car_list)):
+                                for node in car_list[r][1]:
+                                    if node == cam_num:
+                                        r_idx = r
+                                        l = []
+                                        for third in car_list[r][2]:
+                                            gen_3rd = next_camera(third)
+                                            g3_row, g3_col = get_camera_index(gen_3rd)
+                                            CCTV_OPEN[g3_row][g3_col] += 1
+                                            l.append(gen_3rd)
+                                        car_list[r].append(l)
+                                        g1_row, g1_col = get_camera_index(car_list[r][0][0])
+                                        CCTV_OPEN[g1_row][g1_col] -= 1
+                                        del car_list[r][0]
+
+                            # 형제 제거
+                            for 
+                                
+
+
+                                        
 
                             
+                            # 3세대 OPEN
+                            for node in next_camera(cam_num):
+                                idx_row, idx_col = get_camera_index(node)
+                                gen_2nd.append(node)
+                            for node in gen_2nd:
+                                idx_row, idx_col = get_camera_index(node)
+                                CCTV_OPEN[idx_row][idx_col] += 1
+
+                            # time vector IoU  
                             # 입차 카메라가 아닌 기준
                             near_idx = 0
                             IoU = False
@@ -226,35 +261,7 @@ def watch_cctv(cam_num, row, col, CCTV_OPEN, CCTV_exist,TRIGGER):
                             if IoU:
                                 time_vector[near_idx].append([time_save, a, b])
                             
-                            # 기존 1세대 제거
-                            beforeNode = TRIGGER[row][col]
-                            bN_row, bN_col = get_camera_index(beforeNode)
-                            CCTV_OPEN[bN_row][bN_col] -= 1
-                            TRIGGER[bN_row][bN_col] = 0
-
-
-                            # 형제 2세대 제거
-                            for r in range(len(TRIGGER)):
-                                for c in range(len(TRIGGER[r])):
-                                    if TRIGGER[r][c] == beforeNode and r != row and c != col:
-                                        TRIGGER[r][c] = 0
-                                        CCTV_OPEN[r][c] -= 1
-                                        next_cam = CCTV_exist[r][c]
-                                        
-
-
-                                        
-
                             
-                            # 3세대 OPEN
-                            for node in next_camera(cam_num):
-                                idx_row, idx_col = get_camera_index(node)
-                                TRIGGER[idx_row][idx_col] = cam_num
-                                gen_2nd.append(node)
-                            for node in gen_2nd:
-                                idx_row, idx_col = get_camera_index(node)
-                                TRIGGER[idx_row][idx_col] = node
-                                CCTV_OPEN[idx_row][idx_col] += 1
                             
                             
                             
@@ -385,12 +392,15 @@ CCTV_OPEN[0][28] = 1
 thread[2][4] = Thread(target=watch_cctv, args=(CCTV_exist[i][j], i, j, CCTV_OPEN, CCTV_exist, TRIGGER))
 thread[0][28] = Thread(target=watch_cctv, args=(CCTV_exist[i][j], i, j, CCTV_OPEN, CCTV_exist, TRIGGER))
 
+# car list
+car_list = []
+
 # 카메라 OPEN -> read
 while True:
     for i, port in enumerate(CCTV_OPEN):
         for j, cam in enumerate(CCTV_OPEN[i]):
             if CCTV_OPEN[i][j] > 0 and thread[i][j] == 0: # 이미 쓰레드 동작중이면 다시 실행X
-                thread[i][j] = Thread(target=watch_cctv, args=(CCTV_exist[i][j], i, j, CCTV_OPEN, CCTV_exist, TRIGGER))
+                thread[i][j] = Thread(target=watch_cctv, args=(CCTV_exist[i][j], i, j, CCTV_OPEN, CCTV_exist, car_list))
                 thread[i][j].start()
                 
 
